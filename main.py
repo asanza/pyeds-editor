@@ -7,9 +7,10 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
     QMenuBar, QMenu, QFileDialog, QMessageBox, QPushButton, QHeaderView,
     QInputDialog, QComboBox, QStyledItemDelegate, QListWidget, QListWidgetItem, QSplitter,
-    QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout
+    QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog
 )
 from PySide6.QtCore import Qt
+from pdo_mapper import PDOMapperDialog
 
 class EDSParser(configparser.ConfigParser):
     def __init__(self, *args, **kwargs):
@@ -212,6 +213,10 @@ class EDSEditor(QMainWindow):
         
         c_export_action = tools_menu.addAction("Export to C/H Files")
         c_export_action.triggered.connect(self.generate_c_export)
+        
+        tools_menu.addSeparator()
+        pdo_action = tools_menu.addAction("Visual PDO Mapper")
+        pdo_action.triggered.connect(self.open_pdo_mapper)
 
         # Main Layout
         central_widget = QWidget()
@@ -359,7 +364,60 @@ class EDSEditor(QMainWindow):
             
             html.append(f"<tr><td><b>{sec}</b></td><td>{name}</td><td>{obj_type}</td><td>{access}</td><td>{default}</td></tr>")
             
-        html.append("</table></body></html>")
+        html.append("</table>")
+        
+        # PDO Memory Maps
+        html.append("<h2>PDO Memory Maps</h2>")
+        
+        def render_pdo_table(base_idx, title_prefix):
+            for i in range(32):
+                map_idx = f"{base_idx + i:04X}"
+                if self.parser.has_section(map_idx):
+                    html.append(f"<h3>{title_prefix} {i+1} (0x{map_idx})</h3>")
+                    html.append("<table><tr><th>Offset (Bits)</th><th>Mapped Object</th><th>Name</th><th>Length</th></tr>")
+                    
+                    sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                    try: sub_count = int(sub_count_str)
+                    except: sub_count = 0
+                    
+                    bit_offset = 0
+                    for s in range(1, sub_count + 1):
+                        sub_sec = f"{map_idx}sub{s}"
+                        if self.parser.has_section(sub_sec):
+                            default_val = self.parser.get(sub_sec, "DefaultValue", fallback="0x00000000")
+                            try:
+                                val_int = int(default_val, 16)
+                                if val_int == 0: continue
+                                length = val_int & 0xFF
+                                sub_idx = (val_int >> 8) & 0xFF
+                                obj_idx = (val_int >> 16) & 0xFFFF
+                                
+                                # Resolve name
+                                target_name = "Unknown Object"
+                                # Try with subindex formatting
+                                target_sec = f"{obj_idx:04X}sub{sub_idx:02X}"
+                                if self.parser.has_section(target_sec):
+                                    target_name = self.parser.get(target_sec, "ParameterName", fallback="Unknown Object")
+                                elif self.parser.has_section(target_sec.upper()):
+                                    target_name = self.parser.get(target_sec.upper(), "ParameterName", fallback="Unknown Object")
+                                elif self.parser.has_section(target_sec.lower()):
+                                    target_name = self.parser.get(target_sec.lower(), "ParameterName", fallback="Unknown Object")
+                                else:
+                                    # Try just the index (if sub0)
+                                    target_sec_no_sub = f"{obj_idx:04X}"
+                                    if self.parser.has_section(target_sec_no_sub):
+                                        target_name = self.parser.get(target_sec_no_sub, "ParameterName", fallback="Unknown Object")
+                                        
+                                html.append(f"<tr><td><b>{bit_offset}</b></td><td>0x{obj_idx:04X}sub{sub_idx:02X}</td><td>{target_name}</td><td>{length} bits</td></tr>")
+                                bit_offset += length
+                            except ValueError:
+                                pass
+                    html.append("</table>")
+            
+        render_pdo_table(0x1600, "Receive PDO (RPDO)")
+        render_pdo_table(0x1A00, "Transmit PDO (TPDO)")
+        
+        html.append("</body></html>")
         
         try:
             with open(file_name, "w") as f:
@@ -369,6 +427,17 @@ class EDSEditor(QMainWindow):
             webbrowser.open(f"file://{os.path.abspath(file_name)}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to write report:\n{str(e)}")
+
+    def open_pdo_mapper(self):
+        if not self.parser.sections():
+            QMessageBox.warning(self, "Error", "No EDS data loaded.")
+            return
+            
+        dialog = PDOMapperDialog(self.parser, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.load_eds_data()
+            if self.current_section:
+                self.populate_table(self.current_section)
 
     def generate_c_export(self):
         if not self.parser.sections():
@@ -535,14 +604,20 @@ class EDSEditor(QMainWindow):
         self.table_widget.setRowCount(0)
         
         for section in self.parser.sections():
-            item = QTreeWidgetItem([section])
+            name = self.parser.get(section, "ParameterName", fallback="")
+            display_text = f"[{section}] {name}" if name else section
+            item = QTreeWidgetItem([display_text])
+            item.setData(0, Qt.UserRole, section)
             self.tree_widget.addTopLevelItem(item)
 
     def on_section_selected(self, current, previous):
         if not current:
             return
             
-        section_name = current.text(0)
+        section_name = current.data(0, Qt.UserRole)
+        if not section_name:
+            section_name = current.text(0)
+            
         self.current_section = section_name
         
         if section_name == "DeviceInfo":

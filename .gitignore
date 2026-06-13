@@ -1,0 +1,7 @@
+edsgui/
+*.eds
+eds_report.html
+OD.h
+OD.c
+__pycache__/
+*.pyc
