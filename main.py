@@ -631,12 +631,32 @@ class EDSEditor(QMainWindow):
         self.tree_widget.clear()
         self.table_widget.setRowCount(0)
         
+        parent_nodes = {}
+        
+        # First pass: create top-level parent nodes
         for section in self.parser.sections():
-            name = self.parser.get(section, "ParameterName", fallback="")
-            display_text = f"[{section}] {name}" if name else section
-            item = QTreeWidgetItem([display_text])
-            item.setData(0, Qt.UserRole, section)
-            self.tree_widget.addTopLevelItem(item)
+            if "sub" not in section.lower():
+                name = self.parser.get(section, "ParameterName", fallback="")
+                display_text = f"[{section}] {name}" if name else section
+                item = QTreeWidgetItem([display_text])
+                item.setData(0, Qt.UserRole, section)
+                self.tree_widget.addTopLevelItem(item)
+                parent_nodes[section.lower()] = item
+                
+        # Second pass: attach sub-items to their parents
+        for section in self.parser.sections():
+            if "sub" in section.lower():
+                parent_key = section.lower().split("sub")[0]
+                
+                name = self.parser.get(section, "ParameterName", fallback="")
+                display_text = f"[{section}] {name}" if name else section
+                item = QTreeWidgetItem([display_text])
+                item.setData(0, Qt.UserRole, section)
+                
+                if parent_key in parent_nodes:
+                    parent_nodes[parent_key].addChild(item)
+                else:
+                    self.tree_widget.addTopLevelItem(item)
 
     def on_section_selected(self, current, previous):
         if not current:
