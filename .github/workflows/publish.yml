@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/pycanopen-editor
+      url: https://pypi.org/p/pyeds-editor
     permissions:
       id-token: write  # IMPORTANT: mandatory for PyPI Trusted Publishing
       contents: read

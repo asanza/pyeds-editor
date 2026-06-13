@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pycanopen-editor"
+name = "pyeds-editor"
 version = "1.0.0"
 authors = [
   { name="Diego Asanza", email="f.asanza@gmail.com" },
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pycanopen-editor = "pycanopen_editor.main:run"
+pyeds-editor = "pycanopen_editor.main:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
