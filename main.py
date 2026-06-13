@@ -1,3 +1,18 @@
+"""
+PyCANopen EDS Editor
+Copyright (C) 2026 Diego Asanza <f.asanza@gmail.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+"""
+
 import sys
 import os
 import json
@@ -11,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from pdo_mapper import PDOMapperDialog
+from object_wizard import ObjectWizardDialog
 
 class EDSParser(configparser.ConfigParser):
     def __init__(self, *args, **kwargs):
@@ -217,6 +233,9 @@ class EDSEditor(QMainWindow):
         tools_menu.addSeparator()
         pdo_action = tools_menu.addAction("Visual PDO Mapper")
         pdo_action.triggered.connect(self.open_pdo_mapper)
+        
+        wizard_action = tools_menu.addAction("Smart Object Wizard")
+        wizard_action.triggered.connect(self.open_object_wizard)
 
         # Main Layout
         central_widget = QWidget()
@@ -438,6 +457,15 @@ class EDSEditor(QMainWindow):
             self.load_eds_data()
             if self.current_section:
                 self.populate_table(self.current_section)
+
+    def open_object_wizard(self):
+        if not self.parser.sections():
+            QMessageBox.warning(self, "Error", "No EDS data loaded. Create or Open an EDS first.")
+            return
+            
+        dialog = ObjectWizardDialog(self.parser, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.load_eds_data()
 
     def generate_c_export(self):
         if not self.parser.sections():
