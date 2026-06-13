@@ -1,0 +1,10 @@
+{
+  "id": "442",
+  "name": "Motor Starters",
+  "objects": {
+    "6040": { "ParameterName": "Controlword", "ObjectType": "0x7", "DataType": "0x0006", "AccessType": "rw" },
+    "6041": { "ParameterName": "Statusword", "ObjectType": "0x7", "DataType": "0x0006", "AccessType": "ro" },
+    "6050": { "ParameterName": "Motor Overload Protection Configuration", "ObjectType": "0x7", "DataType": "0x0007", "AccessType": "rw" },
+    "6054": { "ParameterName": "Thermal Load Value", "ObjectType": "0x7", "DataType": "0x0005", "AccessType": "ro" }
+  }
+}

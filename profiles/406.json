@@ -1,0 +1,8 @@
+{
+  "id": "406",
+  "name": "Encoder",
+  "objects": {
+    "6000": { "ParameterName": "Operating parameters", "ObjectType": "0x7", "DataType": "0x0006", "AccessType": "rw" },
+    "6004": { "ParameterName": "Position value", "ObjectType": "0x7", "DataType": "0x0004", "AccessType": "ro" }
+  }
+}

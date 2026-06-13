@@ -1,0 +1,10 @@
+{
+  "id": "402",
+  "name": "Drives and Motion Control",
+  "objects": {
+    "6040": { "ParameterName": "Controlword", "ObjectType": "0x7", "DataType": "0x0006", "AccessType": "rw" },
+    "6041": { "ParameterName": "Statusword", "ObjectType": "0x7", "DataType": "0x0006", "AccessType": "ro" },
+    "6060": { "ParameterName": "Modes of operation", "ObjectType": "0x7", "DataType": "0x0002", "AccessType": "rw" },
+    "6064": { "ParameterName": "Position actual value", "ObjectType": "0x7", "DataType": "0x0004", "AccessType": "ro" }
+  }
+}
