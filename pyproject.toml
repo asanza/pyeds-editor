@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pycanopen-editor"
+version = "1.0.0"
+authors = [
+  { name="Diego Asanza", email="f.asanza@gmail.com" },
+]
+description = "A modern, cross-platform CANopen EDS editor built with Python and PySide6."
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Embedded Systems",
+]
+dependencies = [
+    "PySide6>=6.0.0",
+]
+
+[project.scripts]
+pycanopen-editor = "pycanopen_editor.main:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pycanopen_editor.profiles" = ["*.json"]

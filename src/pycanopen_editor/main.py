@@ -809,7 +809,7 @@ class EDSEditor(QMainWindow):
         self.new_device_menu.clear()
         self.profiles = {}
         
-        profiles_dir = "profiles"
+        profiles_dir = os.path.join(os.path.dirname(__file__), "profiles")
         if os.path.exists(profiles_dir):
             for filename in os.listdir(profiles_dir):
                 if filename.endswith(".json"):
@@ -891,8 +891,11 @@ the Free Software Foundation, either version 3 of the License, or
 <p>See <a href='https://www.gnu.org/licenses/gpl-3.0.html'>GNU GPLv3</a> for details.</p>"""
         QMessageBox.about(self, "About PyCANopen", text)
 
-if __name__ == "__main__":
+def run():
     app = QApplication(sys.argv)
     window = EDSEditor()
     window.show()
     sys.exit(app.exec())
+
+if __name__ == "__main__":
+    run()
