@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
     QMenuBar, QMenu, QFileDialog, QMessageBox, QPushButton, QHeaderView,
     QInputDialog, QComboBox, QStyledItemDelegate, QListWidget, QListWidgetItem, QSplitter,
-    QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog
+    QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog, QTextEdit, QTabWidget
 )
 from PySide6.QtCore import Qt
 from pdo_mapper import PDOMapperDialog
@@ -196,6 +196,11 @@ class EDSEditor(QMainWindow):
         
         self.current_file = None
         self.parser = EDSParser()
+        self.current_section = None
+        self.updating_table = False
+        self.updating_desc = False
+        self.meta_data = {}
+        self.meta_file = None
         
         self.init_ui()
         
@@ -236,6 +241,10 @@ class EDSEditor(QMainWindow):
         
         wizard_action = tools_menu.addAction("Smart Object Wizard")
         wizard_action.triggered.connect(self.open_object_wizard)
+        
+        help_menu = menu_bar.addMenu("Help")
+        about_action = help_menu.addAction("About")
+        about_action.triggered.connect(self.show_about)
 
         # Main Layout
         central_widget = QWidget()
@@ -291,11 +300,25 @@ class EDSEditor(QMainWindow):
         top_layout.addLayout(left_layout, 1)
         top_layout.addWidget(self.right_stack, 2)
         
+        self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setMaximumHeight(200)
+        
         self.validation_list = QListWidget()
-        self.validation_list.setMaximumHeight(150)
+        
+        desc_widget = QWidget()
+        desc_layout = QVBoxLayout(desc_widget)
+        desc_layout.setContentsMargins(0, 0, 0, 0)
+        self.desc_editor = QTextEdit()
+        self.desc_editor.setPlaceholderText("Enter extended human-readable description for this object...")
+        self.desc_editor.textChanged.connect(self.on_desc_changed)
+        desc_layout.addWidget(self.desc_editor)
+        
+        self.bottom_tabs.addTab(self.validation_list, "Validation Log")
+        self.bottom_tabs.addTab(desc_widget, "Extended Documentation")
         
         splitter.addWidget(top_widget)
-        splitter.addWidget(self.validation_list)
+        splitter.addWidget(self.bottom_tabs)
+        self.bottom_tabs.setCurrentIndex(1)
         
         self.current_section = None
         self.updating_table = False
@@ -674,6 +697,12 @@ class EDSEditor(QMainWindow):
         else:
             self.right_stack.setCurrentIndex(0)
             self.populate_table(section_name)
+            
+            # Load documentation
+            self.updating_desc = True
+            self.desc_editor.setText(self.meta_data.get(section_name, ""))
+            self.bottom_tabs.setTabText(1, f"Extended Doc [{section_name}]")
+            self.updating_desc = False
 
     def populate_table(self, section_name):
         self.updating_table = True
@@ -703,6 +732,30 @@ class EDSEditor(QMainWindow):
             key = self.table_widget.item(row, 0).text()
             new_value = item.text()
             self.parser.set(self.current_section, key, new_value)
+
+    def on_desc_changed(self):
+        if self.updating_desc or not self.current_section or not self.current_file:
+            return
+            
+        desc = self.desc_editor.toPlainText().strip()
+        if desc:
+            self.meta_data[self.current_section] = desc
+        elif self.current_section in self.meta_data:
+            del self.meta_data[self.current_section]
+            
+        # Save to JSON
+        try:
+            device_name = self.parser.get("DeviceInfo", "ProductName", fallback="Unknown")
+            version = self.parser.get("FileInfo", "RevisionNumber", fallback="Unknown")
+            meta = {
+                "product_name": device_name,
+                "revision": version,
+                "descriptions": self.meta_data
+            }
+            with open(self.meta_file, "w") as f:
+                json.dump(meta, f, indent=4)
+        except Exception as e:
+            print(f"Failed to save metadata: {e}")
 
     def add_section(self):
         section_name, ok = QInputDialog.getText(self, "Add Section", "Section Name (e.g., 1000 or 1018sub1):")
@@ -735,6 +788,18 @@ class EDSEditor(QMainWindow):
                 self.parser = EDSParser()
                 self.parser.read(file_name)
                 self.current_file = file_name
+                
+                self.meta_file = f"{file_name}.meta.json"
+                self.meta_data = {}
+                if os.path.exists(self.meta_file):
+                    try:
+                        with open(self.meta_file, "r") as f:
+                            meta = json.load(f)
+                            if "descriptions" in meta:
+                                self.meta_data = meta["descriptions"]
+                    except:
+                        pass
+                        
                 self.load_eds_data()
                 self.setWindowTitle(f"CANopen EDS Editor - {self.current_file}")
             except Exception as e:
@@ -815,6 +880,16 @@ class EDSEditor(QMainWindow):
             QMessageBox.information(self, "Success", "File saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save file:\n{str(e)}")
+
+    def show_about(self):
+        text = """<h2>PyCANopen EDS Editor</h2>
+<p><b>Copyright (C) 2026 Diego Asanza &lt;f.asanza@gmail.com&gt;</b></p>
+<p>This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.</p>
+<p>See <a href='https://www.gnu.org/licenses/gpl-3.0.html'>GNU GPLv3</a> for details.</p>"""
+        QMessageBox.about(self, "About PyCANopen", text)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
