@@ -17,6 +17,9 @@ import sys
 import os
 import json
 import configparser
+import zipfile
+import tempfile
+import shutil
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
@@ -195,12 +198,14 @@ class EDSEditor(QMainWindow):
         self.resize(1000, 600)
         
         self.current_file = None
+        self.temp_dir = tempfile.mkdtemp()
+        self.temp_eds_path = os.path.join(self.temp_dir, "unnamed.eds")
         self.parser = EDSParser()
         self.current_section = None
         self.updating_table = False
         self.updating_desc = False
         self.meta_data = {}
-        self.meta_file = None
+        self.meta_file = os.path.join(self.temp_dir, "unnamed.eds.meta.json")
         
         self.init_ui()
         
@@ -212,14 +217,18 @@ class EDSEditor(QMainWindow):
         self.new_device_menu = file_menu.addMenu("New Device")
         self.load_profiles_menu()
 
-        open_action = file_menu.addAction("Open EDS")
+        open_action = file_menu.addAction("Open Project/EDS")
         open_action.triggered.connect(self.open_file)
         
-        save_action = file_menu.addAction("Save EDS")
+        save_action = file_menu.addAction("Save")
         save_action.triggered.connect(self.save_file)
         
         save_as_action = file_menu.addAction("Save As...")
         save_as_action.triggered.connect(self.save_file_as)
+        
+        file_menu.addSeparator()
+        export_action = file_menu.addAction("Export Raw EDS")
+        export_action.triggered.connect(self.export_raw_eds)
         
         file_menu.addSeparator()
         exit_action = file_menu.addAction("Exit")
@@ -782,15 +791,35 @@ class EDSEditor(QMainWindow):
                 QMessageBox.warning(self, "Error", f"Property '{key}' already exists.")
 
     def open_file(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open EDS File", "", "EDS Files (*.eds);;INI Files (*.ini);;All Files (*)")
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open File", "", "EDS Projects (*.edsprj);;EDS Files (*.eds);;All Files (*)")
         if file_name:
             try:
-                self.parser = EDSParser()
-                self.parser.read(file_name)
+                self.meta_data = {}
                 self.current_file = file_name
                 
-                self.meta_file = f"{file_name}.meta.json"
-                self.meta_data = {}
+                if file_name.endswith('.edsprj'):
+                    # Unzip to temporary directory
+                    with zipfile.ZipFile(file_name, 'r') as zip_ref:
+                        zip_ref.extractall(self.temp_dir)
+                        
+                    eds_path = None
+                    meta_path = None
+                    for f in os.listdir(self.temp_dir):
+                        if f.endswith('.eds'): eds_path = os.path.join(self.temp_dir, f)
+                        elif f.endswith('.meta.json'): meta_path = os.path.join(self.temp_dir, f)
+                        
+                    if not eds_path:
+                        raise Exception("No EDS file found inside the project archive.")
+                        
+                    self.temp_eds_path = eds_path
+                    self.meta_file = meta_path if meta_path else f"{eds_path}.meta.json"
+                else:
+                    self.temp_eds_path = file_name
+                    self.meta_file = f"{file_name}.meta.json"
+
+                self.parser = EDSParser()
+                self.parser.read(self.temp_eds_path)
+                
                 if os.path.exists(self.meta_file):
                     try:
                         with open(self.meta_file, "r") as f:
@@ -801,7 +830,7 @@ class EDSEditor(QMainWindow):
                         pass
                         
                 self.load_eds_data()
-                self.setWindowTitle(f"CANopen EDS Editor - {self.current_file}")
+                self.setWindowTitle(f"CANopen EDS Editor - {os.path.basename(self.current_file)}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to read file:\n{str(e)}")
 
@@ -829,6 +858,9 @@ class EDSEditor(QMainWindow):
     def new_device(self, profile_id):
         self.parser = EDSParser()
         self.current_file = None
+        self.temp_eds_path = os.path.join(self.temp_dir, f"profile_{profile_id}.eds")
+        self.meta_file = f"{self.temp_eds_path}.meta.json"
+        self.meta_data = {}
         self.setWindowTitle(f"CANopen EDS Editor - Unnamed Device (CiA {profile_id})")
         
         # Add basic FileInfo and DeviceInfo
@@ -867,19 +899,48 @@ class EDSEditor(QMainWindow):
             self.save_file_as()
 
     def save_file_as(self):
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save EDS File", "", "EDS Files (*.eds);;All Files (*)")
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save Project/EDS", "", "EDS Projects (*.edsprj);;EDS Files (*.eds)")
         if file_name:
             self._save(file_name)
             self.current_file = file_name
-            self.setWindowTitle(f"CANopen EDS Editor - {self.current_file}")
+            self.setWindowTitle(f"CANopen EDS Editor - {os.path.basename(self.current_file)}")
 
     def _save(self, file_name):
         try:
-            with open(file_name, 'w') as configfile:
+            # Write current config to temp file
+            with open(self.temp_eds_path, 'w') as configfile:
                 self.parser.write(configfile, space_around_delimiters=False)
+                
+            if file_name.endswith('.edsprj'):
+                with zipfile.ZipFile(file_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    zipf.write(self.temp_eds_path, os.path.basename(self.temp_eds_path))
+                    if os.path.exists(self.meta_file):
+                        zipf.write(self.meta_file, os.path.basename(self.meta_file))
+            else:
+                if self.temp_eds_path != file_name:
+                    shutil.copy2(self.temp_eds_path, file_name)
+                if os.path.exists(self.meta_file) and self.meta_file != f"{file_name}.meta.json":
+                    shutil.copy2(self.meta_file, f"{file_name}.meta.json")
+                    self.meta_file = f"{file_name}.meta.json"
+                self.temp_eds_path = file_name
+                
             QMessageBox.information(self, "Success", "File saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save file:\n{str(e)}")
+
+    def export_raw_eds(self):
+        if not self.parser.sections():
+            QMessageBox.warning(self, "Error", "No EDS data to export.")
+            return
+            
+        file_name, _ = QFileDialog.getSaveFileName(self, "Export Raw EDS", "", "EDS Files (*.eds)")
+        if file_name:
+            try:
+                with open(file_name, 'w') as configfile:
+                    self.parser.write(configfile, space_around_delimiters=False)
+                QMessageBox.information(self, "Success", f"Raw EDS exported to {file_name}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to export file:\n{str(e)}")
 
     def show_about(self):
         text = """<h2>PyCANopen EDS Editor</h2>
