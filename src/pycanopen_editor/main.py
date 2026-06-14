@@ -28,8 +28,13 @@ from PySide6.QtWidgets import (
     QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog, QTextEdit, QTabWidget, QLabel
 )
 from PySide6.QtCore import Qt
-from .pdo_mapper import PDOMapperDialog
-from .object_wizard import ObjectWizardDialog
+try:
+    from .pdo_mapper import PDOMapperDialog
+    from .object_wizard import ObjectWizardDialog
+except ImportError:
+    # Fallback for running the script directly during development
+    from pdo_mapper import PDOMapperDialog
+    from object_wizard import ObjectWizardDialog
 
 class EDSParser(configparser.ConfigParser):
     def __init__(self, *args, **kwargs):
@@ -471,6 +476,70 @@ class EDSEditor(QMainWindow):
         render_pdo_table(0x1600, "Receive PDO (RPDO)")
         render_pdo_table(0x1A00, "Transmit PDO (TPDO)")
         
+        # Bus Throughput Estimation
+        html.append("<h2>Bus Throughput Estimation</h2>")
+        
+        # Get Baud Rates
+        baud_rates = []
+        if self.parser.has_section("DeviceInfo"):
+            for rate in ["10", "20", "50", "125", "250", "500", "800", "1000"]:
+                if self.parser.get("DeviceInfo", f"BaudRate_{rate}", fallback="0") == "1":
+                    baud_rates.append(int(rate) * 1000)
+                    
+        if not baud_rates:
+            baud_rates = [250000] # Default assumption
+            
+        html.append("<table><tr><th>TPDO Index</th><th>Event Timer</th><th>Payload</th><th>Frequency</th><th>Bandwidth</th></tr>")
+        
+        total_bps = 0
+        
+        for i in range(512): # 1800 to 19FF
+            comm_idx = f"{0x1800 + i:04X}"
+            map_idx = f"{0x1A00 + i:04X}"
+            
+            if self.parser.has_section(comm_idx):
+                timer_str = self.parser.get(f"{comm_idx}sub5", "DefaultValue", fallback="0")
+                try: timer = int(timer_str, 16) if timer_str.lower().startswith("0x") else int(timer_str)
+                except: timer = 0
+                
+                if timer > 0:
+                    payload_bits = 0
+                    sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                    try: sub_count = int(sub_count_str, 16) if sub_count_str.lower().startswith("0x") else int(sub_count_str)
+                    except: sub_count = 0
+                    
+                    for s in range(1, sub_count + 1):
+                        sub_sec = f"{map_idx}sub{s:X}"
+                        if not self.parser.has_section(sub_sec):
+                            sub_sec = f"{map_idx}sub{s}"
+                        if self.parser.has_section(sub_sec):
+                            val_str = self.parser.get(sub_sec, "DefaultValue", fallback="0")
+                            try:
+                                val_int = int(val_str, 16) if val_str.lower().startswith("0x") else int(val_str)
+                                length = val_int & 0xFF
+                                payload_bits += length
+                            except: pass
+                            
+                    payload_bytes = (payload_bits + 7) // 8
+                    stuffing = (34 + 8 * payload_bytes) // 5
+                    frame_bits = 47 + (8 * payload_bytes) + stuffing
+                    
+                    hz = 1000.0 / timer
+                    bps = frame_bits * hz
+                    total_bps += bps
+                    
+                    html.append(f"<tr><td>{comm_idx}</td><td>{timer} ms</td><td>{payload_bytes} bytes ({payload_bits}b)</td><td>{hz:.1f} Hz</td><td>{bps:.0f} bps</td></tr>")
+        
+        html.append("</table>")
+        
+        html.append(f"<p><b>Total Periodic Traffic from this device:</b> {total_bps:.0f} bits/sec</p>")
+        html.append("<ul>")
+        for br in baud_rates:
+            load = (total_bps / br) * 100
+            color = "red" if load > 60 else "orange" if load > 30 else "green"
+            html.append(f"<li>Load at {br//1000} kbps: <strong style='color:{color};'>{load:.2f}%</strong></li>")
+        html.append("</ul>")
+
         html.append("</body></html>")
         
         try:
