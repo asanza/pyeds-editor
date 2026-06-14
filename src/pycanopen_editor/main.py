@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QComboBox, QStyledItemDelegate, QListWidget, QListWidgetItem, QSplitter,
     QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog, QTextEdit, QTabWidget, QLabel
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 try:
     from .pdo_mapper import PDOMapperDialog
     from .object_wizard import ObjectWizardDialog
@@ -202,6 +202,9 @@ class EDSEditor(QMainWindow):
         self.setWindowTitle("CANopen EDS Editor")
         self.resize(1000, 600)
         
+        self.settings = QSettings("PyCANopen", "EDSEditor")
+        self.last_dir = self.settings.value("last_dir", "")
+        
         self.current_file = None
         self.temp_dir = tempfile.mkdtemp()
         self.temp_eds_path = os.path.join(self.temp_dir, "unnamed.eds")
@@ -297,7 +300,10 @@ class EDSEditor(QMainWindow):
         self.table_widget = QTableWidget()
         self.table_widget.setColumnCount(2)
         self.table_widget.setHorizontalHeaderLabels(["Key", "Value"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.table_widget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        col_width = self.settings.value("table_col0_width", 250, type=int)
+        self.table_widget.setColumnWidth(0, col_width)
         self.table_widget.setItemDelegate(PropertyDelegate(self))
         self.table_widget.itemChanged.connect(self.on_item_changed)
         
@@ -387,9 +393,12 @@ class EDSEditor(QMainWindow):
             QMessageBox.warning(self, "Error", "No EDS data to report on.")
             return
             
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save HTML Report", "eds_report.html", "HTML Files (*.html)")
+        default_path = os.path.join(self.last_dir, "eds_report.html") if self.last_dir else "eds_report.html"
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save HTML Report", default_path, "HTML Files (*.html)")
         if not file_name:
             return
+            
+        self.last_dir = os.path.dirname(file_name)
             
         html = [
             "<html><head><style>",
@@ -961,8 +970,9 @@ class EDSEditor(QMainWindow):
                 QMessageBox.warning(self, "Error", f"Property '{key}' already exists.")
 
     def open_file(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open File", "", "EDS Projects (*.edsprj);;EDS Files (*.eds);;All Files (*)")
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open File", self.last_dir, "EDS Projects (*.edsprj);;EDS Files (*.eds);;All Files (*)")
         if file_name:
+            self.last_dir = os.path.dirname(file_name)
             try:
                 self.meta_data = {}
                 self.current_file = file_name
@@ -1069,8 +1079,9 @@ class EDSEditor(QMainWindow):
             self.save_file_as()
 
     def save_file_as(self):
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save Project/EDS", "", "EDS Projects (*.edsprj);;EDS Files (*.eds)")
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save Project/EDS", self.last_dir, "EDS Projects (*.edsprj);;EDS Files (*.eds)")
         if file_name:
+            self.last_dir = os.path.dirname(file_name)
             self._save(file_name)
             self.current_file = file_name
             self.setWindowTitle(f"CANopen EDS Editor - {os.path.basename(self.current_file)}")
@@ -1103,8 +1114,9 @@ class EDSEditor(QMainWindow):
             QMessageBox.warning(self, "Error", "No EDS data to export.")
             return
             
-        file_name, _ = QFileDialog.getSaveFileName(self, "Export Raw EDS", "", "EDS Files (*.eds)")
+        file_name, _ = QFileDialog.getSaveFileName(self, "Export Raw EDS", self.last_dir, "EDS Files (*.eds)")
         if file_name:
+            self.last_dir = os.path.dirname(file_name)
             try:
                 with open(file_name, 'w') as configfile:
                     self.parser.write(configfile, space_around_delimiters=False)
@@ -1121,6 +1133,11 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.</p>
 <p>See <a href='https://www.gnu.org/licenses/gpl-3.0.html'>GNU GPLv3</a> for details.</p>"""
         QMessageBox.about(self, "About PyCANopen", text)
+
+    def closeEvent(self, event):
+        self.settings.setValue("table_col0_width", self.table_widget.columnWidth(0))
+        self.settings.setValue("last_dir", self.last_dir)
+        super().closeEvent(event)
 
 def run():
     app = QApplication(sys.argv)
