@@ -994,10 +994,8 @@ class EDSEditor(QMainWindow):
             try:
                 self.current_file = file_name
                 if file_name.lower().endswith(".xdd"):
-                    from .models import XDDModel
                     self.model = XDDModel()
                 else:
-                    from .models import EDSModel
                     self.model = EDSModel()
                 self.model.load(file_name)
                 self.load_eds_data()
@@ -1033,11 +1031,9 @@ class EDSEditor(QMainWindow):
 
     def new_device(self, profile_id, is_xdd=False):
         if is_xdd:
-            from .models import XDDModel
             self.model = XDDModel()
             ext = ".xdd"
         else:
-            from .models import EDSModel
             self.model = EDSModel()
             ext = ".eds"
             
