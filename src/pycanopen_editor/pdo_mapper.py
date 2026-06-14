@@ -42,7 +42,8 @@ class DraggableListWidget(QListWidget):
         drag.exec_(supportedActions)
 
 class DroppableTreeWidget(QTreeWidget):
-    def __init__(self):
+    def __init__(self, model=None):
+        self.model = model
         super().__init__()
         self.setAcceptDrops(True)
         self.setColumnCount(3)
@@ -81,8 +82,9 @@ class DroppableTreeWidget(QTreeWidget):
         idx, sub, length, name = text.split(":", 3)
         length_int = int(length)
         
-        if current_bits + length_int > 64:
-            QMessageBox.warning(self, "PDO Size Error", f"Cannot map this object. Exceeds 64 bits limit (Currently {current_bits} bits).")
+        max_bits = 512 if (self.model and self.model.is_canopen_fd()) else 64
+        if current_bits + length_int > max_bits:
+            QMessageBox.warning(self, "PDO Size Error", f"Cannot map this object. Exceeds {max_bits} bits limit (Currently {current_bits} bits).")
             return
             
         hex_val = f"0x{int(idx, 16):04X}{int(sub, 16):02X}{length_int:02X}"
@@ -94,9 +96,9 @@ class DroppableTreeWidget(QTreeWidget):
         event.acceptProposedAction()
 
 class PDOMapperDialog(QDialog):
-    def __init__(self, parser, parent=None):
+    def __init__(self, model, parent=None):
         super().__init__(parent)
-        self.parser = parser
+        self.model = model
         self.setWindowTitle("Visual PDO Mapper")
         self.resize(900, 600)
         
@@ -130,7 +132,7 @@ class PDOMapperDialog(QDialog):
         controls_layout.addWidget(btn_add_pdo)
         right_layout.addLayout(controls_layout)
         
-        self.pdo_tree = DroppableTreeWidget()
+        self.pdo_tree = DroppableTreeWidget(self.model)
         right_layout.addWidget(self.pdo_tree)
         
         btn_delete_mapping = QPushButton("Remove Selected Mapping")
@@ -168,17 +170,17 @@ class PDOMapperDialog(QDialog):
     def populate_variables(self):
         self.var_list.clear()
         
-        for sec in sorted(self.parser.sections()):
+        for sec in sorted(self.model.sections()):
             if "sub" in sec.lower():
                 parent = sec.lower().split("sub")[0]
-                obj_type = self.parser.get(parent, "ObjectType", fallback="0x7").lower()
+                obj_type = self.model.get(parent, "ObjectType", fallback="0x7").lower()
                 if obj_type not in ["0x8", "0x08", "0x9", "0x09"]:
                     continue
                 
-                dt = self.parser.get(sec, "DataType", fallback="")
+                dt = self.model.get(sec, "DataType", fallback="")
                 bits = self.get_bit_length(dt)
                 if bits > 0:
-                    name = self.parser.get(sec, "ParameterName", fallback="Unnamed")
+                    name = self.model.get(sec, "ParameterName", fallback="Unnamed")
                     idx = parent.zfill(4).upper()
                     sub = sec.lower().split("sub")[1].zfill(2).upper()
                     
@@ -187,12 +189,12 @@ class PDOMapperDialog(QDialog):
                     self.var_list.addItem(item)
                     
             elif sec.isdigit() and len(sec) == 4:
-                obj_type = self.parser.get(sec, "ObjectType", fallback="0x7").lower()
+                obj_type = self.model.get(sec, "ObjectType", fallback="0x7").lower()
                 if obj_type in ["0x7", "0x07"]:
-                    dt = self.parser.get(sec, "DataType", fallback="")
+                    dt = self.model.get(sec, "DataType", fallback="")
                     bits = self.get_bit_length(dt)
                     if bits > 0:
-                        name = self.parser.get(sec, "ParameterName", fallback="Unnamed")
+                        name = self.model.get(sec, "ParameterName", fallback="Unnamed")
                         idx = sec.zfill(4).upper()
                         sub = "00"
                         item = QListWidgetItem(f"[{idx}] {name} ({bits} bits)")
@@ -208,18 +210,18 @@ class PDOMapperDialog(QDialog):
         for i in range(32):
             map_idx = f"{base_map_idx + i:04X}"
             
-            if self.parser.has_section(map_idx):
+            if self.model.has_section(map_idx):
                 parent_item = QTreeWidgetItem(self.pdo_tree, [f"{pdo_name} {i+1} (0x{map_idx})", "", ""])
                 parent_item.setData(0, Qt.UserRole, map_idx)
                 
-                sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                sub_count_str = self.model.get(map_idx, "SubNumber", fallback="0")
                 try: sub_count = int(sub_count_str)
                 except: sub_count = 0
                 
                 for s in range(1, sub_count + 1):
                     sub_sec = f"{map_idx}sub{s}"
-                    if self.parser.has_section(sub_sec):
-                        default_val = self.parser.get(sub_sec, "DefaultValue", fallback="0x00000000")
+                    if self.model.has_section(sub_sec):
+                        default_val = self.model.get(sub_sec, "DefaultValue", fallback="0x00000000")
                         try:
                             val_int = int(default_val, 16)
                             length = val_int & 0xFF
@@ -227,16 +229,16 @@ class PDOMapperDialog(QDialog):
                             obj_idx = (val_int >> 16) & 0xFFFF
                             target_name = "Unknown Object"
                             target_sec = f"{obj_idx:04X}sub{sub_idx:02X}"
-                            if self.parser.has_section(target_sec):
-                                target_name = self.parser.get(target_sec, "ParameterName", fallback="Unknown Object")
-                            elif self.parser.has_section(target_sec.upper()):
-                                target_name = self.parser.get(target_sec.upper(), "ParameterName", fallback="Unknown Object")
-                            elif self.parser.has_section(target_sec.lower()):
-                                target_name = self.parser.get(target_sec.lower(), "ParameterName", fallback="Unknown Object")
+                            if self.model.has_section(target_sec):
+                                target_name = self.model.get(target_sec, "ParameterName", fallback="Unknown Object")
+                            elif self.model.has_section(target_sec.upper()):
+                                target_name = self.model.get(target_sec.upper(), "ParameterName", fallback="Unknown Object")
+                            elif self.model.has_section(target_sec.lower()):
+                                target_name = self.model.get(target_sec.lower(), "ParameterName", fallback="Unknown Object")
                             else:
                                 target_sec_no_sub = f"{obj_idx:04X}"
-                                if self.parser.has_section(target_sec_no_sub):
-                                    target_name = self.parser.get(target_sec_no_sub, "ParameterName", fallback="Unknown Object")
+                                if self.model.has_section(target_sec_no_sub):
+                                    target_name = self.model.get(target_sec_no_sub, "ParameterName", fallback="Unknown Object")
                                     
                             child = QTreeWidgetItem(parent_item, [f"[{obj_idx:04X}sub{sub_idx:02X}] {target_name}", f"0x{val_int:08X}", str(length)])
                             child.setData(0, Qt.UserRole, "mapping")
@@ -251,7 +253,7 @@ class PDOMapperDialog(QDialog):
         
         for i in range(32):
             map_idx = f"{base_map_idx + i:04X}"
-            if not self.parser.has_section(map_idx):
+            if not self.model.has_section(map_idx):
                 parent_item = QTreeWidgetItem(self.pdo_tree, [f"{pdo_name} {i+1} (0x{map_idx})", "", ""])
                 parent_item.setData(0, Qt.UserRole, map_idx)
                 parent_item.setExpanded(True)
@@ -273,42 +275,42 @@ class PDOMapperDialog(QDialog):
             pdo_node = root.child(i)
             map_idx = pdo_node.data(0, Qt.UserRole)
             
-            if not self.parser.has_section(map_idx):
-                self.parser.add_section(map_idx)
-                self.parser.set(map_idx, "ParameterName", f"PDO Mapping {map_idx}")
-                self.parser.set(map_idx, "ObjectType", "0x8")
+            if not self.model.has_section(map_idx):
+                self.model.add_section(map_idx)
+                self.model.set(map_idx, "ParameterName", f"PDO Mapping {map_idx}")
+                self.model.set(map_idx, "ObjectType", "0x8")
                 
-            sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+            sub_count_str = self.model.get(map_idx, "SubNumber", fallback="0")
             try: old_count = int(sub_count_str)
             except: old_count = 0
             for s in range(1, old_count + 1):
-                if self.parser.has_section(f"{map_idx}sub{s}"):
-                    self.parser.remove_section(f"{map_idx}sub{s}")
+                if self.model.has_section(f"{map_idx}sub{s}"):
+                    self.model.remove_section(f"{map_idx}sub{s}")
                     
-            if not self.parser.has_section(f"{map_idx}sub0"):
-                self.parser.add_section(f"{map_idx}sub0")
+            if not self.model.has_section(f"{map_idx}sub0"):
+                self.model.add_section(f"{map_idx}sub0")
                 
-            self.parser.set(f"{map_idx}sub0", "ParameterName", "Number of mapped objects")
-            self.parser.set(f"{map_idx}sub0", "ObjectType", "0x7")
-            self.parser.set(f"{map_idx}sub0", "DataType", "0x0005")
-            self.parser.set(f"{map_idx}sub0", "AccessType", "rw")
-            self.parser.set(f"{map_idx}sub0", "DefaultValue", str(pdo_node.childCount()))
-            self.parser.set(map_idx, "SubNumber", str(pdo_node.childCount() + 1))
+            self.model.set(f"{map_idx}sub0", "ParameterName", "Number of mapped objects")
+            self.model.set(f"{map_idx}sub0", "ObjectType", "0x7")
+            self.model.set(f"{map_idx}sub0", "DataType", "0x0005")
+            self.model.set(f"{map_idx}sub0", "AccessType", "rw")
+            self.model.set(f"{map_idx}sub0", "DefaultValue", str(pdo_node.childCount()))
+            self.model.set(map_idx, "SubNumber", str(pdo_node.childCount() + 1))
             
             for s in range(pdo_node.childCount()):
                 child = pdo_node.child(s)
                 hex_val = child.text(1)
                 
                 sub_sec = f"{map_idx}sub{s+1}"
-                if not self.parser.has_section(sub_sec):
-                    self.parser.add_section(sub_sec)
+                if not self.model.has_section(sub_sec):
+                    self.model.add_section(sub_sec)
                     
-                self.parser.set(sub_sec, "ParameterName", f"Mapped object {s+1}")
-                self.parser.set(sub_sec, "ObjectType", "0x7")
-                self.parser.set(sub_sec, "DataType", "0x0007")
-                self.parser.set(sub_sec, "AccessType", "rw")
-                self.parser.set(sub_sec, "DefaultValue", hex_val)
-                self.parser.set(sub_sec, "PDOMapping", "0")
+                self.model.set(sub_sec, "ParameterName", f"Mapped object {s+1}")
+                self.model.set(sub_sec, "ObjectType", "0x7")
+                self.model.set(sub_sec, "DataType", "0x0007")
+                self.model.set(sub_sec, "AccessType", "rw")
+                self.model.set(sub_sec, "DefaultValue", hex_val)
+                self.model.set(sub_sec, "PDOMapping", "0")
                 
         QMessageBox.information(self, "Success", "PDO Mappings applied to current session.")
         self.accept()

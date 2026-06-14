@@ -31,19 +31,13 @@ from PySide6.QtCore import Qt, QSettings
 try:
     from .pdo_mapper import PDOMapperDialog
     from .object_wizard import ObjectWizardDialog
+    from .models import EDSModel, XDDModel
 except ImportError:
     # Fallback for running the script directly during development
     from pdo_mapper import PDOMapperDialog
     from object_wizard import ObjectWizardDialog
+    from models import EDSModel, XDDModel
 
-class EDSParser(configparser.ConfigParser):
-    def __init__(self, *args, **kwargs):
-        kwargs['interpolation'] = None
-        super().__init__(*args, **kwargs)
-
-    # Override optionxform to preserve the case of keys
-    def optionxform(self, optionstr):
-        return optionstr
 
 class PropertyDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
@@ -119,9 +113,9 @@ class PropertyDelegate(QStyledItemDelegate):
 
 
 class DeviceInfoWidget(QWidget):
-    def __init__(self, parser):
+    def __init__(self, model):
         super().__init__()
-        self.parser = parser
+        self.model = model
         self.updating = False
         
         layout = QVBoxLayout(self)
@@ -142,8 +136,8 @@ class DeviceInfoWidget(QWidget):
         layout.addWidget(general_group)
         
         # Baud Rates
-        baud_group = QGroupBox("Supported Baud Rates")
-        baud_layout = QGridLayout(baud_group)
+        self.baud_group = QGroupBox("Supported Baud Rates (Classic)")
+        baud_layout = QGridLayout(self.baud_group)
         self.baud_boxes = {}
         baud_rates = ["10", "20", "50", "125", "250", "500", "800", "1000"]
         for i, rate in enumerate(baud_rates):
@@ -151,8 +145,30 @@ class DeviceInfoWidget(QWidget):
             self.baud_boxes[f"BaudRate_{rate}"] = cb
             baud_layout.addWidget(cb, i // 4, i % 4)
             cb.stateChanged.connect(lambda state, k=f"BaudRate_{rate}": self.on_field_changed(k, "1" if state else "0"))
-            
-        layout.addWidget(baud_group)
+        layout.addWidget(self.baud_group)
+        
+        # Nominal Baud Rates (FD)
+        self.nominal_baud_group = QGroupBox("Nominal Baud Rates (Arbitration)")
+        nominal_layout = QGridLayout(self.nominal_baud_group)
+        self.nominal_baud_boxes = {}
+        for i, rate in enumerate(baud_rates):
+            cb = QCheckBox(f"{rate} kbps")
+            self.nominal_baud_boxes[f"NominalBaudRate_{rate}"] = cb
+            nominal_layout.addWidget(cb, i // 4, i % 4)
+            cb.stateChanged.connect(lambda state, k=f"NominalBaudRate_{rate}": self.on_field_changed(k, "1" if state else "0"))
+        layout.addWidget(self.nominal_baud_group)
+        
+        # Data Baud Rates (FD)
+        self.data_baud_group = QGroupBox("Data Baud Rates (Payload)")
+        data_layout = QGridLayout(self.data_baud_group)
+        self.data_baud_boxes = {}
+        data_rates = ["1", "2", "4", "5", "8", "10"]
+        for i, rate in enumerate(data_rates):
+            cb = QCheckBox(f"{rate} Mbps")
+            self.data_baud_boxes[f"DataBaudRate_{rate}"] = cb
+            data_layout.addWidget(cb, i // 4, i % 4)
+            cb.stateChanged.connect(lambda state, k=f"DataBaudRate_{rate}": self.on_field_changed(k, "1" if state else "0"))
+        layout.addWidget(self.data_baud_group)
         
         # Features
         features_group = QGroupBox("Features")
@@ -172,29 +188,42 @@ class DeviceInfoWidget(QWidget):
     def load_data(self):
         self.updating = True
         
-        if not self.parser.has_section("DeviceInfo"):
+        if not self.model.has_section("DeviceInfo"):
             self.updating = False
             return
             
-        self.vendor_name.setText(self.parser.get("DeviceInfo", "VendorName", fallback=""))
-        self.vendor_number.setText(self.parser.get("DeviceInfo", "VendorNumber", fallback=""))
-        self.product_name.setText(self.parser.get("DeviceInfo", "ProductName", fallback=""))
-        self.product_number.setText(self.parser.get("DeviceInfo", "ProductNumber", fallback=""))
+        self.vendor_name.setText(self.model.get("DeviceInfo", "VendorName", fallback=""))
+        self.vendor_number.setText(self.model.get("DeviceInfo", "VendorNumber", fallback=""))
+        self.product_name.setText(self.model.get("DeviceInfo", "ProductName", fallback=""))
+        self.product_number.setText(self.model.get("DeviceInfo", "ProductNumber", fallback=""))
         
+        is_fd = self.model.is_canopen_fd()
+        self.baud_group.setVisible(not is_fd)
+        self.nominal_baud_group.setVisible(is_fd)
+        self.data_baud_group.setVisible(is_fd)
+
         for key, cb in self.baud_boxes.items():
-            val = self.parser.get("DeviceInfo", key, fallback="0")
+            val = self.model.get("DeviceInfo", key, fallback="0")
             cb.setChecked(val == "1")
             
-        lss = self.parser.get("DeviceInfo", "LSS_Supported", fallback="0")
+        for key, cb in self.nominal_baud_boxes.items():
+            val = self.model.get("DeviceInfo", key, fallback="0")
+            cb.setChecked(val == "1")
+            
+        for key, cb in self.data_baud_boxes.items():
+            val = self.model.get("DeviceInfo", key, fallback="0")
+            cb.setChecked(val == "1")
+            
+        lss = self.model.get("DeviceInfo", "LSS_Supported", fallback="0")
         self.lss_supported.setChecked(lss == "1")
         
         self.updating = False
         
     def on_field_changed(self, key, value):
         if self.updating: return
-        if not self.parser.has_section("DeviceInfo"):
-            self.parser.add_section("DeviceInfo")
-        self.parser.set("DeviceInfo", key, value)
+        if not self.model.has_section("DeviceInfo"):
+            self.model.add_section("DeviceInfo")
+        self.model.set("DeviceInfo", key, value)
 
 class EDSEditor(QMainWindow):
     def __init__(self):
@@ -208,12 +237,12 @@ class EDSEditor(QMainWindow):
         self.current_file = None
         self.temp_dir = tempfile.mkdtemp()
         self.temp_eds_path = os.path.join(self.temp_dir, "unnamed.eds")
-        self.parser = EDSParser()
+        self.model = EDSModel()
         self.current_section = None
         self.updating_table = False
         self.updating_desc = False
-        self.meta_data = {}
-        self.meta_file = os.path.join(self.temp_dir, "unnamed.eds.meta.json")
+        
+        
         
         self.init_ui()
         
@@ -314,7 +343,7 @@ class EDSEditor(QMainWindow):
         table_layout.addWidget(btn_add_property)
         
         # Stack 1: Device Info Widget
-        self.device_info_widget = DeviceInfoWidget(self.parser)
+        self.device_info_widget = DeviceInfoWidget(self.model)
         
         self.right_stack.addWidget(self.table_container)
         self.right_stack.addWidget(self.device_info_widget)
@@ -352,11 +381,11 @@ class EDSEditor(QMainWindow):
         
         mandatory_sections = ["FileInfo", "DeviceInfo", "1000", "1001", "1018"]
         for sec in mandatory_sections:
-            if not self.parser.has_section(sec):
+            if not self.model.has_section(sec):
                 warnings.append(f"CRITICAL: Missing mandatory section [{sec}]")
                 
-        if self.parser.has_section("1018"):
-            sub_count = self.parser.get("1018", "SubNumber", fallback=None)
+        if self.model.has_section("1018"):
+            sub_count = self.model.get("1018", "SubNumber", fallback=None)
             if not sub_count:
                 warnings.append("WARNING: [1018] Identity Object is missing 'SubNumber'")
             else:
@@ -364,16 +393,16 @@ class EDSEditor(QMainWindow):
                     count = int(sub_count)
                     for i in range(count + 1):
                         sub_sec = f"1018sub{i}"
-                        if not self.parser.has_section(sub_sec):
+                        if not self.model.has_section(sub_sec):
                             warnings.append(f"WARNING: Identity Object declares {count} sub-items but [{sub_sec}] is missing.")
                 except ValueError:
                     warnings.append("WARNING: [1018] 'SubNumber' is not a valid integer.")
                     
-        for section in self.parser.sections():
+        for section in self.model.sections():
             if section.isdigit() or "sub" in section:
-                if not self.parser.has_option(section, "ParameterName"):
+                if not self.model.has_option(section, "ParameterName"):
                     warnings.append(f"INFO: [{section}] is missing 'ParameterName'")
-                if not self.parser.has_option(section, "ObjectType"):
+                if not self.model.has_option(section, "ObjectType"):
                     warnings.append(f"WARNING: [{section}] is missing 'ObjectType'")
                     
         if not warnings:
@@ -389,7 +418,7 @@ class EDSEditor(QMainWindow):
                 self.validation_list.addItem(item)
 
     def generate_report(self):
-        if not self.parser.sections():
+        if not self.model.sections():
             QMessageBox.warning(self, "Error", "No EDS data to report on.")
             return
             
@@ -414,21 +443,21 @@ class EDSEditor(QMainWindow):
         
         # Device Info
         html.append("<h2>Device Information</h2><table><tr><th>Property</th><th>Value</th></tr>")
-        if self.parser.has_section("DeviceInfo"):
-            for k, v in self.parser.items("DeviceInfo"):
+        if self.model.has_section("DeviceInfo"):
+            for k, v in self.model.items("DeviceInfo"):
                 html.append(f"<tr><td>{k}</td><td>{v}</td></tr>")
         html.append("</table>")
         
         # Object Dictionary
         html.append("<h2>Object Dictionary</h2><table><tr><th>Index</th><th>Name</th><th>Type</th><th>Access</th><th>Default</th></tr>")
         
-        for sec in sorted(self.parser.sections()):
+        for sec in sorted(self.model.sections()):
             if sec in ["FileInfo", "DeviceInfo", "Comments", "DummyUsage"]: continue
             
-            name = self.parser.get(sec, "ParameterName", fallback="")
-            obj_type = self.parser.get(sec, "ObjectType", fallback="")
-            access = self.parser.get(sec, "AccessType", fallback="")
-            default = self.parser.get(sec, "DefaultValue", fallback="")
+            name = self.model.get(sec, "ParameterName", fallback="")
+            obj_type = self.model.get(sec, "ObjectType", fallback="")
+            access = self.model.get(sec, "AccessType", fallback="")
+            default = self.model.get(sec, "DefaultValue", fallback="")
             
             html.append(f"<tr><td><b>{sec}</b></td><td>{name}</td><td>{obj_type}</td><td>{access}</td><td>{default}</td></tr>")
             
@@ -440,19 +469,19 @@ class EDSEditor(QMainWindow):
         def render_pdo_table(base_idx, title_prefix):
             for i in range(32):
                 map_idx = f"{base_idx + i:04X}"
-                if self.parser.has_section(map_idx):
+                if self.model.has_section(map_idx):
                     html.append(f"<h3>{title_prefix} {i+1} (0x{map_idx})</h3>")
                     html.append("<table><tr><th>Offset (Bits)</th><th>Mapped Object</th><th>Name</th><th>Length</th></tr>")
                     
-                    sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                    sub_count_str = self.model.get(map_idx, "SubNumber", fallback="0")
                     try: sub_count = int(sub_count_str)
                     except: sub_count = 0
                     
                     bit_offset = 0
                     for s in range(1, sub_count + 1):
                         sub_sec = f"{map_idx}sub{s}"
-                        if self.parser.has_section(sub_sec):
-                            default_val = self.parser.get(sub_sec, "DefaultValue", fallback="0x00000000")
+                        if self.model.has_section(sub_sec):
+                            default_val = self.model.get(sub_sec, "DefaultValue", fallback="0x00000000")
                             try:
                                 val_int = int(default_val, 16)
                                 if val_int == 0: continue
@@ -464,17 +493,17 @@ class EDSEditor(QMainWindow):
                                 target_name = "Unknown Object"
                                 # Try with subindex formatting
                                 target_sec = f"{obj_idx:04X}sub{sub_idx:02X}"
-                                if self.parser.has_section(target_sec):
-                                    target_name = self.parser.get(target_sec, "ParameterName", fallback="Unknown Object")
-                                elif self.parser.has_section(target_sec.upper()):
-                                    target_name = self.parser.get(target_sec.upper(), "ParameterName", fallback="Unknown Object")
-                                elif self.parser.has_section(target_sec.lower()):
-                                    target_name = self.parser.get(target_sec.lower(), "ParameterName", fallback="Unknown Object")
+                                if self.model.has_section(target_sec):
+                                    target_name = self.model.get(target_sec, "ParameterName", fallback="Unknown Object")
+                                elif self.model.has_section(target_sec.upper()):
+                                    target_name = self.model.get(target_sec.upper(), "ParameterName", fallback="Unknown Object")
+                                elif self.model.has_section(target_sec.lower()):
+                                    target_name = self.model.get(target_sec.lower(), "ParameterName", fallback="Unknown Object")
                                 else:
                                     # Try just the index (if sub0)
                                     target_sec_no_sub = f"{obj_idx:04X}"
-                                    if self.parser.has_section(target_sec_no_sub):
-                                        target_name = self.parser.get(target_sec_no_sub, "ParameterName", fallback="Unknown Object")
+                                    if self.model.has_section(target_sec_no_sub):
+                                        target_name = self.model.get(target_sec_no_sub, "ParameterName", fallback="Unknown Object")
                                         
                                 html.append(f"<tr><td><b>{bit_offset}</b></td><td>0x{obj_idx:04X}sub{sub_idx:02X}</td><td>{target_name}</td><td>{length} bits</td></tr>")
                                 bit_offset += length
@@ -490,9 +519,9 @@ class EDSEditor(QMainWindow):
         
         # Get Baud Rates
         baud_rates = []
-        if self.parser.has_section("DeviceInfo"):
+        if self.model.has_section("DeviceInfo"):
             for rate in ["10", "20", "50", "125", "250", "500", "800", "1000"]:
-                if self.parser.get("DeviceInfo", f"BaudRate_{rate}", fallback="0") == "1":
+                if self.model.get("DeviceInfo", f"BaudRate_{rate}", fallback="0") == "1":
                     baud_rates.append(int(rate) * 1000)
                     
         if not baud_rates:
@@ -506,23 +535,23 @@ class EDSEditor(QMainWindow):
             comm_idx = f"{0x1800 + i:04X}"
             map_idx = f"{0x1A00 + i:04X}"
             
-            if self.parser.has_section(comm_idx):
-                timer_str = self.parser.get(f"{comm_idx}sub5", "DefaultValue", fallback="0")
+            if self.model.has_section(comm_idx):
+                timer_str = self.model.get(f"{comm_idx}sub5", "DefaultValue", fallback="0")
                 try: timer = int(timer_str, 16) if timer_str.lower().startswith("0x") else int(timer_str)
                 except: timer = 0
                 
                 if timer > 0:
                     payload_bits = 0
-                    sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                    sub_count_str = self.model.get(map_idx, "SubNumber", fallback="0")
                     try: sub_count = int(sub_count_str, 16) if sub_count_str.lower().startswith("0x") else int(sub_count_str)
                     except: sub_count = 0
                     
                     for s in range(1, sub_count + 1):
                         sub_sec = f"{map_idx}sub{s:X}"
-                        if not self.parser.has_section(sub_sec):
+                        if not self.model.has_section(sub_sec):
                             sub_sec = f"{map_idx}sub{s}"
-                        if self.parser.has_section(sub_sec):
-                            val_str = self.parser.get(sub_sec, "DefaultValue", fallback="0")
+                        if self.model.has_section(sub_sec):
+                            val_str = self.model.get(sub_sec, "DefaultValue", fallback="0")
                             try:
                                 val_int = int(val_str, 16) if val_str.lower().startswith("0x") else int(val_str)
                                 length = val_int & 0xFF
@@ -530,8 +559,13 @@ class EDSEditor(QMainWindow):
                             except: pass
                             
                     payload_bytes = (payload_bits + 7) // 8
-                    stuffing = (34 + 8 * payload_bytes) // 5
-                    frame_bits = 47 + (8 * payload_bytes) + stuffing
+                    if self.model.is_canopen_fd():
+                        crc = 17 if payload_bytes <= 16 else 21
+                        stuffing = (29 + 8 * payload_bytes + crc) // 5
+                        frame_bits = 29 + (8 * payload_bytes) + crc + stuffing
+                    else:
+                        stuffing = (34 + 8 * payload_bytes) // 5
+                        frame_bits = 47 + (8 * payload_bytes) + stuffing
                     
                     hz = 1000.0 / timer
                     bps = frame_bits * hz
@@ -561,27 +595,27 @@ class EDSEditor(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to write report:\n{str(e)}")
 
     def open_pdo_mapper(self):
-        if not self.parser.sections():
+        if not self.model.sections():
             QMessageBox.warning(self, "Error", "No EDS data loaded.")
             return
             
-        dialog = PDOMapperDialog(self.parser, self)
+        dialog = PDOMapperDialog(self.model, self)
         if dialog.exec() == QDialog.Accepted:
             self.load_eds_data()
             if self.current_section:
                 self.populate_table(self.current_section)
 
     def open_object_wizard(self):
-        if not self.parser.sections():
+        if not self.model.sections():
             QMessageBox.warning(self, "Error", "No EDS data loaded. Create or Open an EDS first.")
             return
             
-        dialog = ObjectWizardDialog(self.parser, self)
+        dialog = ObjectWizardDialog(self.model, self)
         if dialog.exec() == QDialog.Accepted:
             self.load_eds_data()
 
     def open_throughput_estimator(self):
-        if not self.parser.sections():
+        if not self.model.sections():
             QMessageBox.warning(self, "Error", "No EDS data loaded.")
             return
             
@@ -593,9 +627,9 @@ class EDSEditor(QMainWindow):
         
         # Get Baud Rates
         baud_rates = []
-        if self.parser.has_section("DeviceInfo"):
+        if self.model.has_section("DeviceInfo"):
             for rate in ["10", "20", "50", "125", "250", "500", "800", "1000"]:
-                if self.parser.get("DeviceInfo", f"BaudRate_{rate}", fallback="0") == "1":
+                if self.model.get("DeviceInfo", f"BaudRate_{rate}", fallback="0") == "1":
                     baud_rates.append(int(rate) * 1000)
                     
         if not baud_rates:
@@ -617,24 +651,24 @@ class EDSEditor(QMainWindow):
             comm_idx = f"{0x1800 + i:04X}"
             map_idx = f"{0x1A00 + i:04X}"
             
-            if self.parser.has_section(comm_idx):
-                timer_str = self.parser.get(f"{comm_idx}sub5", "DefaultValue", fallback="0")
+            if self.model.has_section(comm_idx):
+                timer_str = self.model.get(f"{comm_idx}sub5", "DefaultValue", fallback="0")
                 try: timer = int(timer_str, 16) if timer_str.lower().startswith("0x") else int(timer_str)
                 except: timer = 0
                 
                 if timer > 0:
                     # Calculate payload length
                     payload_bits = 0
-                    sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                    sub_count_str = self.model.get(map_idx, "SubNumber", fallback="0")
                     try: sub_count = int(sub_count_str, 16) if sub_count_str.lower().startswith("0x") else int(sub_count_str)
                     except: sub_count = 0
                     
                     for s in range(1, sub_count + 1):
                         sub_sec = f"{map_idx}sub{s:X}"
-                        if not self.parser.has_section(sub_sec):
+                        if not self.model.has_section(sub_sec):
                             sub_sec = f"{map_idx}sub{s}"
-                        if self.parser.has_section(sub_sec):
-                            val_str = self.parser.get(sub_sec, "DefaultValue", fallback="0")
+                        if self.model.has_section(sub_sec):
+                            val_str = self.model.get(sub_sec, "DefaultValue", fallback="0")
                             try:
                                 val_int = int(val_str, 16) if val_str.lower().startswith("0x") else int(val_str)
                                 length = val_int & 0xFF
@@ -642,11 +676,13 @@ class EDSEditor(QMainWindow):
                             except: pass
                             
                     payload_bytes = (payload_bits + 7) // 8
-                    
-                    # CAN Frame calculation (Standard 11-bit ID)
-                    # ~47 bits overhead + payload + bit stuffing approx
-                    stuffing = (34 + 8 * payload_bytes) // 5
-                    frame_bits = 47 + (8 * payload_bytes) + stuffing
+                    if self.model.is_canopen_fd():
+                        crc = 17 if payload_bytes <= 16 else 21
+                        stuffing = (29 + 8 * payload_bytes + crc) // 5
+                        frame_bits = 29 + (8 * payload_bytes) + crc + stuffing
+                    else:
+                        stuffing = (34 + 8 * payload_bytes) // 5
+                        frame_bits = 47 + (8 * payload_bytes) + stuffing
                     
                     hz = 1000.0 / timer
                     bps = frame_bits * hz
@@ -679,7 +715,7 @@ class EDSEditor(QMainWindow):
         dialog.exec()
 
     def generate_c_export(self):
-        if not self.parser.sections():
+        if not self.model.sections():
             QMessageBox.warning(self, "Error", "No EDS data to export.")
             return
             
@@ -723,19 +759,19 @@ class EDSEditor(QMainWindow):
         ]
         
         parents = []
-        for sec in sorted(self.parser.sections()):
+        for sec in sorted(self.model.sections()):
             if sec in ["FileInfo", "DeviceInfo", "Comments", "DummyUsage"]: continue
             if "sub" not in sec.lower():
                 parents.append(sec)
                 
         for p in parents:
-            obj_type = self.parser.get(p, "ObjectType", fallback="0x7").lower()
-            name = self.parser.get(p, "ParameterName", fallback=f"obj_{p}")
+            obj_type = self.model.get(p, "ObjectType", fallback="0x7").lower()
+            name = self.model.get(p, "ParameterName", fallback=f"obj_{p}")
             c_name = clean_name(name)
             
             if obj_type in ["0x7", "0x07"]:
-                dt = self.parser.get(p, "DataType", fallback="0x0007").lower()
-                default_val = self.parser.get(p, "DefaultValue", fallback="0")
+                dt = self.model.get(p, "DataType", fallback="0x0007").lower()
+                default_val = self.model.get(p, "DefaultValue", fallback="0")
                 if not default_val: default_val = "0"
                 if dt.startswith("0x") and len(dt) < 6:
                     dt = "0x" + dt[2:].zfill(4)
@@ -748,7 +784,7 @@ class EDSEditor(QMainWindow):
                 h_lines.append(f"    struct {{")
                 c_lines.append(f"    .{c_name} = {{")
                 
-                sub_count_str = self.parser.get(p, "SubNumber", fallback="0")
+                sub_count_str = self.model.get(p, "SubNumber", fallback="0")
                 try:
                     sub_count = int(sub_count_str)
                 except ValueError:
@@ -756,10 +792,10 @@ class EDSEditor(QMainWindow):
                     
                 for i in range(sub_count + 1):
                     sub_sec = f"{p}sub{i}"
-                    if self.parser.has_section(sub_sec):
-                        sub_name = self.parser.get(sub_sec, "ParameterName", fallback=f"sub{i}")
-                        sub_dt = self.parser.get(sub_sec, "DataType", fallback="0x0007").lower()
-                        default_val = self.parser.get(sub_sec, "DefaultValue", fallback="0")
+                    if self.model.has_section(sub_sec):
+                        sub_name = self.model.get(sub_sec, "ParameterName", fallback=f"sub{i}")
+                        sub_dt = self.model.get(sub_sec, "DataType", fallback="0x0007").lower()
+                        default_val = self.model.get(sub_sec, "DefaultValue", fallback="0")
                         if not default_val: default_val = "0"
                         if sub_dt.startswith("0x") and len(sub_dt) < 6:
                             sub_dt = "0x" + sub_dt[2:].zfill(4)
@@ -796,31 +832,31 @@ class EDSEditor(QMainWindow):
         c_lines.append("const OD_entry_t OD_dictionary[] = {")
         
         for p in parents:
-            obj_type = self.parser.get(p, "ObjectType", fallback="0x7").lower()
-            name = self.parser.get(p, "ParameterName", fallback=f"obj_{p}")
+            obj_type = self.model.get(p, "ObjectType", fallback="0x7").lower()
+            name = self.model.get(p, "ParameterName", fallback=f"obj_{p}")
             c_name = clean_name(name)
             
             if obj_type in ["0x7", "0x07"]:
-                dt = self.parser.get(p, "DataType", fallback="0x0007").lower()
+                dt = self.model.get(p, "DataType", fallback="0x0007").lower()
                 if dt.startswith("0x") and len(dt) < 6: dt = "0x" + dt[2:].zfill(4)
                 c_type = type_map.get(dt, "uint32_t")
-                access = "1" if self.parser.get(p, "AccessType", fallback="ro").lower() in ["rw", "rww"] else "0"
+                access = "1" if self.model.get(p, "AccessType", fallback="ro").lower() in ["rw", "rww"] else "0"
                 c_lines.append(f"    {{ 0x{p}, 0x00, {access}, sizeof({c_type}), &OD.{c_name} }},")
                 
             elif obj_type in ["0x8", "0x08", "0x9", "0x09"]:
-                sub_count_str = self.parser.get(p, "SubNumber", fallback="0")
+                sub_count_str = self.model.get(p, "SubNumber", fallback="0")
                 try: sub_count = int(sub_count_str)
                 except ValueError: sub_count = 0
                     
                 for i in range(sub_count + 1):
                     sub_sec = f"{p}sub{i}"
-                    if self.parser.has_section(sub_sec):
-                        sub_name = self.parser.get(sub_sec, "ParameterName", fallback=f"sub{i}")
-                        sub_dt = self.parser.get(sub_sec, "DataType", fallback="0x0007").lower()
+                    if self.model.has_section(sub_sec):
+                        sub_name = self.model.get(sub_sec, "ParameterName", fallback=f"sub{i}")
+                        sub_dt = self.model.get(sub_sec, "DataType", fallback="0x0007").lower()
                         if sub_dt.startswith("0x") and len(sub_dt) < 6: sub_dt = "0x" + sub_dt[2:].zfill(4)
                         sub_c_name = clean_name(sub_name)
                         sub_c_type = type_map.get(sub_dt, "uint32_t")
-                        access = "1" if self.parser.get(sub_sec, "AccessType", fallback="ro").lower() in ["rw", "rww"] else "0"
+                        access = "1" if self.model.get(sub_sec, "AccessType", fallback="ro").lower() in ["rw", "rww"] else "0"
                         c_lines.append(f"    {{ 0x{p}, 0x{i:02X}, {access}, sizeof({sub_c_type}), &OD.{c_name}.{sub_c_name} }},")
                         
         c_lines.append("};")
@@ -845,9 +881,9 @@ class EDSEditor(QMainWindow):
         parent_nodes = {}
         
         # First pass: create top-level parent nodes
-        for section in self.parser.sections():
+        for section in self.model.sections():
             if "sub" not in section.lower():
-                name = self.parser.get(section, "ParameterName", fallback="")
+                name = self.model.get(section, "ParameterName", fallback="")
                 display_text = f"[{section}] {name}" if name else section
                 item = QTreeWidgetItem([display_text])
                 item.setData(0, Qt.UserRole, section)
@@ -855,11 +891,11 @@ class EDSEditor(QMainWindow):
                 parent_nodes[section.lower()] = item
                 
         # Second pass: attach sub-items to their parents
-        for section in self.parser.sections():
+        for section in self.model.sections():
             if "sub" in section.lower():
                 parent_key = section.lower().split("sub")[0]
                 
-                name = self.parser.get(section, "ParameterName", fallback="")
+                name = self.model.get(section, "ParameterName", fallback="")
                 display_text = f"[{section}] {name}" if name else section
                 item = QTreeWidgetItem([display_text])
                 item.setData(0, Qt.UserRole, section)
@@ -888,7 +924,7 @@ class EDSEditor(QMainWindow):
             
             # Load documentation
             self.updating_desc = True
-            self.desc_editor.setText(self.meta_data.get(section_name, ""))
+            self.desc_editor.setText(self.model.get_metadata(section_name))
             self.bottom_tabs.setTabText(1, f"Extended Doc [{section_name}]")
             self.updating_desc = False
 
@@ -896,8 +932,8 @@ class EDSEditor(QMainWindow):
         self.updating_table = True
         self.table_widget.setRowCount(0)
         
-        if self.parser.has_section(section_name):
-            items = self.parser.items(section_name)
+        if self.model.has_section(section_name):
+            items = self.model.items(section_name)
             self.table_widget.setRowCount(len(items))
             for row, (key, value) in enumerate(items):
                 key_item = QTableWidgetItem(key)
@@ -919,37 +955,19 @@ class EDSEditor(QMainWindow):
         if col == 1: # Value changed
             key = self.table_widget.item(row, 0).text()
             new_value = item.text()
-            self.parser.set(self.current_section, key, new_value)
+            self.model.set(self.current_section, key, new_value)
 
     def on_desc_changed(self):
-        if self.updating_desc or not self.current_section or not self.current_file:
+        if self.updating_desc or not self.current_section:
             return
-            
-        desc = self.desc_editor.toPlainText().strip()
-        if desc:
-            self.meta_data[self.current_section] = desc
-        elif self.current_section in self.meta_data:
-            del self.meta_data[self.current_section]
-            
-        # Save to JSON
-        try:
-            device_name = self.parser.get("DeviceInfo", "ProductName", fallback="Unknown")
-            version = self.parser.get("FileInfo", "RevisionNumber", fallback="Unknown")
-            meta = {
-                "product_name": device_name,
-                "revision": version,
-                "descriptions": self.meta_data
-            }
-            with open(self.meta_file, "w") as f:
-                json.dump(meta, f, indent=4)
-        except Exception as e:
-            print(f"Failed to save metadata: {e}")
+        desc = self.desc_editor.toPlainText()
+        self.model.set_metadata(self.current_section, desc)
 
     def add_section(self):
         section_name, ok = QInputDialog.getText(self, "Add Section", "Section Name (e.g., 1000 or 1018sub1):")
         if ok and section_name:
-            if not self.parser.has_section(section_name):
-                self.parser.add_section(section_name)
+            if not self.model.has_section(section_name):
+                self.model.add_section(section_name)
                 item = QTreeWidgetItem([section_name])
                 self.tree_widget.addTopLevelItem(item)
                 self.tree_widget.setCurrentItem(item)
@@ -963,52 +981,25 @@ class EDSEditor(QMainWindow):
             
         key, ok = QInputDialog.getText(self, "Add Property", "Property Name (Key):")
         if ok and key:
-            if not self.parser.has_option(self.current_section, key):
-                self.parser.set(self.current_section, key, "")
+            if not self.model.has_option(self.current_section, key):
+                self.model.set(self.current_section, key, "")
                 self.populate_table(self.current_section)
             else:
                 QMessageBox.warning(self, "Error", f"Property '{key}' already exists.")
 
     def open_file(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open File", self.last_dir, "EDS Projects (*.edsprj);;EDS Files (*.eds);;All Files (*)")
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open File", self.last_dir, "CANopen Files (*.eds *.xdd);;All Files (*)")
         if file_name:
             self.last_dir = os.path.dirname(file_name)
             try:
-                self.meta_data = {}
                 self.current_file = file_name
-                
-                if file_name.endswith('.edsprj'):
-                    # Unzip to temporary directory
-                    with zipfile.ZipFile(file_name, 'r') as zip_ref:
-                        zip_ref.extractall(self.temp_dir)
-                        
-                    eds_path = None
-                    meta_path = None
-                    for f in os.listdir(self.temp_dir):
-                        if f.endswith('.eds'): eds_path = os.path.join(self.temp_dir, f)
-                        elif f.endswith('.meta.json'): meta_path = os.path.join(self.temp_dir, f)
-                        
-                    if not eds_path:
-                        raise Exception("No EDS file found inside the project archive.")
-                        
-                    self.temp_eds_path = eds_path
-                    self.meta_file = meta_path if meta_path else f"{eds_path}.meta.json"
+                if file_name.lower().endswith(".xdd"):
+                    from .models import XDDModel
+                    self.model = XDDModel()
                 else:
-                    self.temp_eds_path = file_name
-                    self.meta_file = f"{file_name}.meta.json"
-
-                self.parser = EDSParser()
-                self.parser.read(self.temp_eds_path)
-                
-                if os.path.exists(self.meta_file):
-                    try:
-                        with open(self.meta_file, "r") as f:
-                            meta = json.load(f)
-                            if "descriptions" in meta:
-                                self.meta_data = meta["descriptions"]
-                    except:
-                        pass
-                        
+                    from .models import EDSModel
+                    self.model = EDSModel()
+                self.model.load(file_name)
                 self.load_eds_data()
                 self.setWindowTitle(f"CANopen EDS Editor - {os.path.basename(self.current_file)}")
             except Exception as e:
@@ -1024,34 +1015,44 @@ class EDSEditor(QMainWindow):
                 if filename.endswith(".json"):
                     filepath = os.path.join(profiles_dir, filename)
                     try:
+                        import json
                         with open(filepath, "r") as f:
                             profile_data = json.load(f)
                             profile_id = profile_data.get("id")
                             profile_name = profile_data.get("name")
                             if profile_id and profile_name:
                                 self.profiles[profile_id] = profile_data
-                                action = self.new_device_menu.addAction(f"{profile_name} (CiA {profile_id})")
-                                action.triggered.connect(lambda checked=False, pid=profile_id: self.new_device(pid))
+                                
+                                legacy_action = self.new_device_menu.addAction(f"{profile_name} EDS (CiA {profile_id})")
+                                legacy_action.triggered.connect(lambda checked=False, pid=profile_id: self.new_device(pid, is_xdd=False))
+                                
+                                fd_action = self.new_device_menu.addAction(f"{profile_name} XDD (CiA {profile_id})")
+                                fd_action.triggered.connect(lambda checked=False, pid=profile_id: self.new_device(pid, is_xdd=True))
                     except Exception as e:
                         print(f"Failed to load profile {filename}: {e}")
 
-    def new_device(self, profile_id):
-        self.parser = EDSParser()
+    def new_device(self, profile_id, is_xdd=False):
+        if is_xdd:
+            from .models import XDDModel
+            self.model = XDDModel()
+            ext = ".xdd"
+        else:
+            from .models import EDSModel
+            self.model = EDSModel()
+            ext = ".eds"
+            
         self.current_file = None
-        self.temp_eds_path = os.path.join(self.temp_dir, f"profile_{profile_id}.eds")
-        self.meta_file = f"{self.temp_eds_path}.meta.json"
-        self.meta_data = {}
         self.setWindowTitle(f"CANopen EDS Editor - Unnamed Device (CiA {profile_id})")
         
         # Add basic FileInfo and DeviceInfo
-        self.parser.add_section("FileInfo")
-        self.parser.set("FileInfo", "FileName", "unnamed.eds")
-        self.parser.set("FileInfo", "FileVersion", "1")
-        self.parser.set("FileInfo", "FileRevision", "1")
+        self.model.add_section("FileInfo")
+        self.model.set("FileInfo", "FileName", f"unnamed{ext}")
+        self.model.set("FileInfo", "FileVersion", "1")
+        self.model.set("FileInfo", "FileRevision", "1")
         
-        self.parser.add_section("DeviceInfo")
-        self.parser.set("DeviceInfo", "VendorName", "My Vendor")
-        self.parser.set("DeviceInfo", "ProductName", "My Device")
+        self.model.add_section("DeviceInfo")
+        self.model.set("DeviceInfo", "VendorName", "My Vendor")
+        self.model.set("DeviceInfo", "ProductName", "My Device")
         
         # Always add 301 objects first if we are not creating 301 and it exists
         if profile_id != "301" and "301" in self.profiles:
@@ -1067,10 +1068,10 @@ class EDSEditor(QMainWindow):
             
         objects = profile_data.get("objects", {})
         for obj_idx, properties in objects.items():
-            if not self.parser.has_section(obj_idx):
-                self.parser.add_section(obj_idx)
+            if not self.model.has_section(obj_idx):
+                self.model.add_section(obj_idx)
             for k, v in properties.items():
-                self.parser.set(obj_idx, k, str(v))
+                self.model.set(obj_idx, k, str(v))
 
     def save_file(self):
         if self.current_file:
@@ -1079,7 +1080,8 @@ class EDSEditor(QMainWindow):
             self.save_file_as()
 
     def save_file_as(self):
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save Project/EDS", self.last_dir, "EDS Projects (*.edsprj);;EDS Files (*.eds)")
+        filter_str = "XDD Files (*.xdd)" if self.model.is_canopen_fd() else "EDS Files (*.eds)"
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save File", self.last_dir, filter_str)
         if file_name:
             self.last_dir = os.path.dirname(file_name)
             self._save(file_name)
@@ -1088,39 +1090,23 @@ class EDSEditor(QMainWindow):
 
     def _save(self, file_name):
         try:
-            # Write current config to temp file
-            with open(self.temp_eds_path, 'w') as configfile:
-                self.parser.write(configfile, space_around_delimiters=False)
-                
-            if file_name.endswith('.edsprj'):
-                with zipfile.ZipFile(file_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    zipf.write(self.temp_eds_path, os.path.basename(self.temp_eds_path))
-                    if os.path.exists(self.meta_file):
-                        zipf.write(self.meta_file, os.path.basename(self.meta_file))
-            else:
-                if self.temp_eds_path != file_name:
-                    shutil.copy2(self.temp_eds_path, file_name)
-                if os.path.exists(self.meta_file) and self.meta_file != f"{file_name}.meta.json":
-                    shutil.copy2(self.meta_file, f"{file_name}.meta.json")
-                    self.meta_file = f"{file_name}.meta.json"
-                self.temp_eds_path = file_name
-                
+            self.model.save(file_name)
             QMessageBox.information(self, "Success", "File saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save file:\n{str(e)}")
 
     def export_raw_eds(self):
-        if not self.parser.sections():
-            QMessageBox.warning(self, "Error", "No EDS data to export.")
+        if not self.model.sections():
+            QMessageBox.warning(self, "Error", "No data to export.")
             return
             
-        file_name, _ = QFileDialog.getSaveFileName(self, "Export Raw EDS", self.last_dir, "EDS Files (*.eds)")
+        filter_str = "XDD Files (*.xdd)" if self.model.is_canopen_fd() else "EDS Files (*.eds)"
+        file_name, _ = QFileDialog.getSaveFileName(self, "Export Raw", self.last_dir, filter_str)
         if file_name:
             self.last_dir = os.path.dirname(file_name)
             try:
-                with open(file_name, 'w') as configfile:
-                    self.parser.write(configfile, space_around_delimiters=False)
-                QMessageBox.information(self, "Success", f"Raw EDS exported to {file_name}")
+                self.model.save(file_name)
+                QMessageBox.information(self, "Success", f"File exported to {file_name}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to export file:\n{str(e)}")
 

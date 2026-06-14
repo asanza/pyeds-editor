@@ -20,9 +20,9 @@ from PySide6.QtWidgets import (
 )
 
 class ObjectWizardDialog(QDialog):
-    def __init__(self, parser, parent=None):
+    def __init__(self, model, parent=None):
         super().__init__(parent)
-        self.parser = parser
+        self.model = model
         self.setWindowTitle("Smart Object Wizard")
         self.resize(350, 200)
         
@@ -66,36 +66,36 @@ class ObjectWizardDialog(QDialog):
             QMessageBox.warning(self, "Error", "Invalid Hex Index.")
             return
             
-        if self.parser.has_section(idx_str):
+        if self.model.has_section(idx_str):
             QMessageBox.warning(self, "Error", "Index already exists!")
             return
             
         # Create Main Index
-        self.parser.add_section(idx_str)
-        self.parser.set(idx_str, "ParameterName", self.name_input.text())
-        self.parser.set(idx_str, "ObjectType", "0x8" if self.type_combo.currentIndex() == 0 else "0x9")
-        self.parser.set(idx_str, "SubNumber", str(self.count_spin.value() + 1))
+        self.model.add_section(idx_str)
+        self.model.set(idx_str, "ParameterName", self.name_input.text())
+        self.model.set(idx_str, "ObjectType", "0x8" if self.type_combo.currentIndex() == 0 else "0x9")
+        self.model.set(idx_str, "SubNumber", str(self.count_spin.value() + 1))
         
         # Create sub0
         sub0 = f"{idx_str}sub0"
-        self.parser.add_section(sub0)
-        self.parser.set(sub0, "ParameterName", "Highest sub-index supported")
-        self.parser.set(sub0, "ObjectType", "0x7")
-        self.parser.set(sub0, "DataType", "0x0005")
-        self.parser.set(sub0, "AccessType", "ro")
-        self.parser.set(sub0, "DefaultValue", str(self.count_spin.value()))
-        self.parser.set(sub0, "PDOMapping", "0")
+        self.model.add_section(sub0)
+        self.model.set(sub0, "ParameterName", "Highest sub-index supported")
+        self.model.set(sub0, "ObjectType", "0x7")
+        self.model.set(sub0, "DataType", "0x0005")
+        self.model.set(sub0, "AccessType", "ro")
+        self.model.set(sub0, "DefaultValue", str(self.count_spin.value()))
+        self.model.set(sub0, "PDOMapping", "0")
         
         # Create subN
         dt_val = self.dt_combo.currentText().split(" ")[0]
         for i in range(1, self.count_spin.value() + 1):
             subN = f"{idx_str}sub{i}"
-            self.parser.add_section(subN)
-            self.parser.set(subN, "ParameterName", f"Sub-item {i}")
-            self.parser.set(subN, "ObjectType", "0x7")
-            self.parser.set(subN, "DataType", dt_val)
-            self.parser.set(subN, "AccessType", "rw")
-            self.parser.set(subN, "DefaultValue", "0")
-            self.parser.set(subN, "PDOMapping", "1")
+            self.model.add_section(subN)
+            self.model.set(subN, "ParameterName", f"Sub-item {i}")
+            self.model.set(subN, "ObjectType", "0x7")
+            self.model.set(subN, "DataType", dt_val)
+            self.model.set(subN, "AccessType", "rw")
+            self.model.set(subN, "DefaultValue", "0")
+            self.model.set(subN, "PDOMapping", "1")
             
         self.accept()
