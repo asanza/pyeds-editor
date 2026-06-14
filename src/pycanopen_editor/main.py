@@ -25,8 +25,8 @@ from PySide6.QtWidgets import (
     QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog, QTextEdit, QTabWidget
 )
 from PySide6.QtCore import Qt
-from pdo_mapper import PDOMapperDialog
-from object_wizard import ObjectWizardDialog
+from .pdo_mapper import PDOMapperDialog
+from .object_wizard import ObjectWizardDialog
 
 class EDSParser(configparser.ConfigParser):
     def __init__(self, *args, **kwargs):
