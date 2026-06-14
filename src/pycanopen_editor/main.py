@@ -391,7 +391,7 @@ class EDSEditor(QMainWindow):
             else:
                 try:
                     count = int(sub_count)
-                    for i in range(count + 1):
+                    for i in range(count):
                         sub_sec = f"1018sub{i}"
                         if not self.model.has_section(sub_sec):
                             warnings.append(f"WARNING: Identity Object declares {count} sub-items but [{sub_sec}] is missing.")
@@ -478,7 +478,7 @@ class EDSEditor(QMainWindow):
                     except: sub_count = 0
                     
                     bit_offset = 0
-                    for s in range(1, sub_count + 1):
+                    for s in range(1, sub_count):
                         sub_sec = f"{map_idx}sub{s}"
                         if self.model.has_section(sub_sec):
                             default_val = self.model.get(sub_sec, "DefaultValue", fallback="0x00000000")
@@ -546,7 +546,7 @@ class EDSEditor(QMainWindow):
                     try: sub_count = int(sub_count_str, 16) if sub_count_str.lower().startswith("0x") else int(sub_count_str)
                     except: sub_count = 0
                     
-                    for s in range(1, sub_count + 1):
+                    for s in range(1, sub_count):
                         sub_sec = f"{map_idx}sub{s:X}"
                         if not self.model.has_section(sub_sec):
                             sub_sec = f"{map_idx}sub{s}"
@@ -663,7 +663,7 @@ class EDSEditor(QMainWindow):
                     try: sub_count = int(sub_count_str, 16) if sub_count_str.lower().startswith("0x") else int(sub_count_str)
                     except: sub_count = 0
                     
-                    for s in range(1, sub_count + 1):
+                    for s in range(1, sub_count):
                         sub_sec = f"{map_idx}sub{s:X}"
                         if not self.model.has_section(sub_sec):
                             sub_sec = f"{map_idx}sub{s}"
@@ -790,7 +790,7 @@ class EDSEditor(QMainWindow):
                 except ValueError:
                     sub_count = 0
                     
-                for i in range(sub_count + 1):
+                for i in range(sub_count):
                     sub_sec = f"{p}sub{i}"
                     if self.model.has_section(sub_sec):
                         sub_name = self.model.get(sub_sec, "ParameterName", fallback=f"sub{i}")
@@ -848,7 +848,7 @@ class EDSEditor(QMainWindow):
                 try: sub_count = int(sub_count_str)
                 except ValueError: sub_count = 0
                     
-                for i in range(sub_count + 1):
+                for i in range(sub_count):
                     sub_sec = f"{p}sub{i}"
                     if self.model.has_section(sub_sec):
                         sub_name = self.model.get(sub_sec, "ParameterName", fallback=f"sub{i}")

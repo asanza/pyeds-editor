@@ -23,6 +23,9 @@ class DeviceModel:
     def has_section(self, section: str) -> bool:
         raise NotImplementedError
 
+    def has_option(self, section: str, key: str) -> bool:
+        raise NotImplementedError
+
     def sections(self) -> list:
         raise NotImplementedError
 
@@ -88,6 +91,9 @@ class EDSModel(DeviceModel):
     def has_section(self, section: str) -> bool:
         return self.parser.has_section(section)
 
+    def has_option(self, section: str, key: str) -> bool:
+        return self.parser.has_option(section, key)
+
     def sections(self) -> list:
         return self.parser.sections()
 
@@ -132,8 +138,8 @@ class XDDModel(DeviceModel):
         # We start with a base ISO15745 profile structure.
         self.root = ET.Element("ISO15745Profile")
         self.profile_body = ET.SubElement(self.root, "ProfileBody")
-        self.app_process = ET.SubElement(self.profile_body, "ApplicationProcess")
-        self.obj_list = ET.SubElement(self.app_process, "CANopenObjectList")
+        self.app_layers = ET.SubElement(self.profile_body, "ApplicationLayers")
+        self.obj_list = ET.SubElement(self.app_layers, "CANopenObjectList")
         
         # Dictionary to quickly map section string to XML Element for standard lookup
         self._section_map = {}
@@ -182,24 +188,40 @@ class XDDModel(DeviceModel):
         if m:
             self.ns = m.group(0)
             
-        # Find CANopenObjectList
-        self.obj_list = self._find_first(self.root, "CANopenObjectList")
+        # Find or recreate ProfileBody, ApplicationLayers, CANopenObjectList
+        self.profile_body = self._find_first(self.root, "ProfileBody")
+        if self.profile_body is None:
+            self.profile_body = ET.SubElement(self.root, f"{self.ns}ProfileBody")
+            
+        self.obj_list = self._find_first(self.profile_body, "CANopenObjectList")
         if self.obj_list is None:
-            # Recreate if missing
-            self.profile_body = self._find_first(self.root, "ProfileBody")
-            if self.profile_body is None:
-                self.profile_body = ET.SubElement(self.root, f"{self.ns}ProfileBody")
-            self.app_process = self._find_first(self.profile_body, "ApplicationProcess")
-            if self.app_process is None:
-                self.app_process = ET.SubElement(self.profile_body, f"{self.ns}ApplicationProcess")
-            self.obj_list = ET.SubElement(self.app_process, f"{self.ns}CANopenObjectList")
+            self.app_layers = self._find_first(self.profile_body, "ApplicationLayers")
+            if self.app_layers is None:
+                self.app_layers = ET.SubElement(self.profile_body, f"{self.ns}ApplicationLayers")
+            self.obj_list = ET.SubElement(self.app_layers, f"{self.ns}CANopenObjectList")
             
         self._build_section_map()
         
-        # Load DeviceInfo/FileInfo from custom extensions or standard headers if available
-        # For simplicity, we just clear and rely on XDD attributes
+        # Normalization layer: populate DeviceInfo/FileInfo from XDD schema elements
         self.device_info = {}
         self.file_info = {}
+        
+        if self.profile_body is not None:
+            # FileInfo comes from ProfileBody attributes
+            file_attrs = ["fileName", "fileCreator", "fileCreationDate", "fileCreationTime", "fileVersion", "fileRevision"]
+            for attr in file_attrs:
+                val = self.profile_body.get(attr)
+                if val:
+                    self.file_info[attr] = val
+                    
+            # DeviceInfo comes from DeviceIdentity node
+            dev_id = self._find_first(self.profile_body, "DeviceIdentity")
+            if dev_id is not None:
+                dev_attrs = ["vendorName", "vendorID", "productName", "productID"]
+                for attr in dev_attrs:
+                    node = self._find_first(dev_id, attr)
+                    if node is not None and node.text:
+                        self.device_info[attr] = node.text
 
     def save(self, filepath: str) -> None:
         tree = ET.ElementTree(self.root)
@@ -217,6 +239,9 @@ class XDDModel(DeviceModel):
         if section == "FileInfo" and self.file_info:
             return True
         return self._get_element_for_section(section) is not None
+
+    def has_option(self, section: str, key: str) -> bool:
+        return self.get(section, key) is not None
 
     def sections(self) -> list:
         secs = []
@@ -334,8 +359,13 @@ class XDDModel(DeviceModel):
             del self._section_map[section]
 
     def items(self, section: str) -> list:
+        if section == "DeviceInfo":
+            return list(self.device_info.items())
+        if section == "FileInfo":
+            return list(self.file_info.items())
+            
         keys = ["ParameterName", "ObjectType", "DataType", "AccessType", "DefaultValue"]
-        if "SUB" not in section.upper() and section not in ["DeviceInfo", "FileInfo"]:
+        if "SUB" not in section.upper():
             keys.append("SubNumber")
             
         res = []

@@ -218,7 +218,7 @@ class PDOMapperDialog(QDialog):
                 try: sub_count = int(sub_count_str)
                 except: sub_count = 0
                 
-                for s in range(1, sub_count + 1):
+                for s in range(1, sub_count):
                     sub_sec = f"{map_idx}sub{s}"
                     if self.model.has_section(sub_sec):
                         default_val = self.model.get(sub_sec, "DefaultValue", fallback="0x00000000")
@@ -283,7 +283,7 @@ class PDOMapperDialog(QDialog):
             sub_count_str = self.model.get(map_idx, "SubNumber", fallback="0")
             try: old_count = int(sub_count_str)
             except: old_count = 0
-            for s in range(1, old_count + 1):
+            for s in range(1, old_count):
                 if self.model.has_section(f"{map_idx}sub{s}"):
                     self.model.remove_section(f"{map_idx}sub{s}")
                     
