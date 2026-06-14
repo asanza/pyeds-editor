@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
     QMenuBar, QMenu, QFileDialog, QMessageBox, QPushButton, QHeaderView,
     QInputDialog, QComboBox, QStyledItemDelegate, QListWidget, QListWidgetItem, QSplitter,
-    QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog, QTextEdit, QTabWidget
+    QStackedWidget, QFormLayout, QLineEdit, QCheckBox, QGroupBox, QGridLayout, QDialog, QTextEdit, QTabWidget, QLabel
 )
 from PySide6.QtCore import Qt
 from .pdo_mapper import PDOMapperDialog
@@ -250,6 +250,9 @@ class EDSEditor(QMainWindow):
         
         wizard_action = tools_menu.addAction("Smart Object Wizard")
         wizard_action.triggered.connect(self.open_object_wizard)
+        
+        throughput_action = tools_menu.addAction("Bus Throughput Estimator")
+        throughput_action.triggered.connect(self.open_throughput_estimator)
         
         help_menu = menu_bar.addMenu("Help")
         about_action = help_menu.addAction("About")
@@ -498,6 +501,104 @@ class EDSEditor(QMainWindow):
         dialog = ObjectWizardDialog(self.parser, self)
         if dialog.exec() == QDialog.Accepted:
             self.load_eds_data()
+
+    def open_throughput_estimator(self):
+        if not self.parser.sections():
+            QMessageBox.warning(self, "Error", "No EDS data loaded.")
+            return
+            
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Bus Throughput Estimator")
+        dialog.resize(600, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Get Baud Rates
+        baud_rates = []
+        if self.parser.has_section("DeviceInfo"):
+            for rate in ["10", "20", "50", "125", "250", "500", "800", "1000"]:
+                if self.parser.get("DeviceInfo", f"BaudRate_{rate}", fallback="0") == "1":
+                    baud_rates.append(int(rate) * 1000)
+                    
+        if not baud_rates:
+            baud_rates = [250000] # Default assumption
+            
+        info_label = QLabel("Estimating worst-case periodic CAN bus load based on configured TPDO Event Timers:")
+        layout.addWidget(info_label)
+        
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["TPDO Index", "Event Timer", "Payload", "Frequency", "Bandwidth"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(table)
+        
+        total_bps = 0
+        row = 0
+        
+        for i in range(512): # 1800 to 19FF
+            comm_idx = f"{0x1800 + i:04X}"
+            map_idx = f"{0x1A00 + i:04X}"
+            
+            if self.parser.has_section(comm_idx):
+                timer_str = self.parser.get(f"{comm_idx}sub5", "DefaultValue", fallback="0")
+                try: timer = int(timer_str, 16) if timer_str.lower().startswith("0x") else int(timer_str)
+                except: timer = 0
+                
+                if timer > 0:
+                    # Calculate payload length
+                    payload_bits = 0
+                    sub_count_str = self.parser.get(map_idx, "SubNumber", fallback="0")
+                    try: sub_count = int(sub_count_str, 16) if sub_count_str.lower().startswith("0x") else int(sub_count_str)
+                    except: sub_count = 0
+                    
+                    for s in range(1, sub_count + 1):
+                        sub_sec = f"{map_idx}sub{s:X}"
+                        if not self.parser.has_section(sub_sec):
+                            sub_sec = f"{map_idx}sub{s}"
+                        if self.parser.has_section(sub_sec):
+                            val_str = self.parser.get(sub_sec, "DefaultValue", fallback="0")
+                            try:
+                                val_int = int(val_str, 16) if val_str.lower().startswith("0x") else int(val_str)
+                                length = val_int & 0xFF
+                                payload_bits += length
+                            except: pass
+                            
+                    payload_bytes = (payload_bits + 7) // 8
+                    
+                    # CAN Frame calculation (Standard 11-bit ID)
+                    # ~47 bits overhead + payload + bit stuffing approx
+                    stuffing = (34 + 8 * payload_bytes) // 5
+                    frame_bits = 47 + (8 * payload_bytes) + stuffing
+                    
+                    hz = 1000.0 / timer
+                    bps = frame_bits * hz
+                    total_bps += bps
+                    
+                    table.insertRow(row)
+                    table.setItem(row, 0, QTableWidgetItem(comm_idx))
+                    table.setItem(row, 1, QTableWidgetItem(f"{timer} ms"))
+                    table.setItem(row, 2, QTableWidgetItem(f"{payload_bytes} bytes ({payload_bits}b)"))
+                    table.setItem(row, 3, QTableWidgetItem(f"{hz:.1f} Hz"))
+                    table.setItem(row, 4, QTableWidgetItem(f"{bps:.0f} bps"))
+                    row += 1
+                    
+        summary_group = QGroupBox("Network Load Summary")
+        summary_layout = QVBoxLayout(summary_group)
+        
+        summary_layout.addWidget(QLabel(f"<b>Total Periodic Traffic from this device:</b> {total_bps:.0f} bits/sec"))
+        
+        for br in baud_rates:
+            load = (total_bps / br) * 100
+            color = "red" if load > 60 else "orange" if load > 30 else "green"
+            summary_layout.addWidget(QLabel(f"Load at {br//1000} kbps: <span style='color:{color}; font-weight:bold;'>{load:.2f}%</span>"))
+            
+        layout.addWidget(summary_group)
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec()
 
     def generate_c_export(self):
         if not self.parser.sections():
